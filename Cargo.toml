@@ -1,0 +1,35 @@
+[package]
+name = "rsc-dioxus"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+description = "MIAWK desktop client for chat, agents, and swarm views."
+authors = ["Melani"]
+repository = "https://github.com/muxyng/miawk"
+homepage = "https://github.com/muxyng/miawk"
+
+[package.metadata.codex]
+version = "0.118.0-alpha.3"
+
+[features]
+default = ["desktop"]
+desktop = ["dioxus/desktop"]
+
+[dependencies]
+ammonia = "4.1.2"
+base64 = "0.22.1"
+dioxus = "0.7.4"
+dirs = "6.0.0"
+flate2 = "1.1.9"
+futures-util = "0.3.32"
+pulldown-cmark = "0.13.3"
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls"] }
+rfd = "0.17.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tar = "0.4.45"
+tokio = { version = "1.50.0", features = ["io-util", "process", "sync", "time"] }
+tokio-tungstenite = "0.29.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+webbrowser = "1.2.0"

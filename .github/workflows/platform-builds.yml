@@ -1,0 +1,115 @@
+name: Release Builds
+
+on:
+  workflow_dispatch:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            id: linux-x86_64
+            runner: ubuntu-24.04
+            package_types: deb rpm appimage
+            preferred_glob: '*.AppImage'
+            release_asset: miawk-linux-x86_64.AppImage
+          - name: Linux ARM64
+            id: linux-aarch64
+            runner: ubuntu-24.04-arm
+            package_types: deb rpm appimage
+            preferred_glob: '*.AppImage'
+            release_asset: miawk-linux-arm64.AppImage
+          - name: Windows x86_64
+            id: windows-x86_64
+            runner: windows-latest
+            package_types: msi nsis
+            preferred_glob: '*.msi'
+            release_asset: miawk-windows-x86_64.msi
+          - name: Windows ARM64
+            id: windows-aarch64
+            runner: windows-11-arm
+            package_types: msi nsis
+            preferred_glob: '*.msi'
+            release_asset: miawk-windows-arm64.msi
+          - name: macOS x86_64
+            id: macos-x86_64
+            runner: macos-15-intel
+            package_types: app dmg
+            preferred_glob: '*.dmg'
+            release_asset: miawk-macos-x86_64.dmg
+          - name: macOS ARM64
+            id: macos-aarch64
+            runner: macos-15
+            package_types: app dmg
+            preferred_glob: '*.dmg'
+            release_asset: miawk-macos-arm64.dmg
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux system packages
+        if: startsWith(matrix.runner, 'ubuntu-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libxdo-dev \
+            libssl-dev \
+            librsvg2-dev \
+            patchelf \
+            rpm
+
+      - name: Install Dioxus CLI
+        run: cargo install dioxus-cli --locked --version 0.7.4
+
+      - name: Ensure packaging script is executable
+        shell: bash
+        run: chmod +x scripts/package-native.sh
+
+      - name: Bundle native artifacts
+        shell: bash
+        run: ./scripts/package-native.sh "${{ matrix.id }}"
+        env:
+          PACKAGE_TYPES: ${{ matrix.package_types }}
+
+      - name: Prepare preferred release asset
+        shell: bash
+        run: |
+          shopt -s nullglob
+          matches=(artifacts/${{ matrix.id }}/${{ matrix.preferred_glob }})
+          if [ ${#matches[@]} -eq 0 ]; then
+            echo "No preferred asset found for glob ${{ matrix.preferred_glob }}" >&2
+            exit 1
+          fi
+
+          cp "${matches[0]}" "artifacts/${{ matrix.id }}/${{ matrix.release_asset }}"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.id }}
+          path: artifacts/${{ matrix.id }}
+          if-no-files-found: error
+
+      - name: Upload preferred asset to GitHub release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/${{ matrix.id }}/${{ matrix.release_asset }}
+          fail_on_unmatched_files: true

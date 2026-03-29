@@ -1,0 +1,55 @@
+[application]
+name = "miawk"
+default_platform = "desktop"
+out_dir = "dist"
+asset_dir = "assets"
+
+[web.app]
+title = "MIAWK"
+
+[bundle]
+active = true
+targets = ["appimage", "deb", "rpm", "nsis", "msi", "app", "dmg"]
+identifier = "com.melani.miawk"
+publisher = "Melani"
+icon = [
+  "assets/icons/32x32.png",
+  "assets/icons/128x128.png",
+  "assets/icons/128x128@2x.png",
+  "assets/icons/icon.ico",
+  "assets/icons/icon.icns",
+]
+copyright = "Copyright (c) 2026 Melani"
+category = "DeveloperTool"
+short-description = "Cross-platform desktop shell for chat, agents, and swarm views."
+long-description = "MIAWK is a native desktop client for chat, agents, account flows, and swarm views built with Rust and Dioxus."
+
+[bundle.windows]
+digest-algorithm = "sha256"
+allow-downgrades = false
+
+[bundle.windows.webview-install-mode]
+type = "downloadBootstrapper"
+silent = true
+
+[bundle.macos]
+minimum-system-version = "13.0"
+
+[bundle.linux.appimage]
+bundle-media-framework = true
+
+[bundle.linux.deb]
+depends = [
+  "libwebkit2gtk-4.1-0",
+  "libgtk-3-0",
+  "libglib2.0-0",
+  "libxdo3",
+]
+
+[bundle.linux.rpm]
+depends = [
+  "webkit2gtk4.1",
+  "gtk3",
+  "glib2",
+  "xdotool",
+]
