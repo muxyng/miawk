@@ -44,6 +44,7 @@ jobs:
 
       - name: Create GitHub release
         if: steps.release.outputs.exists != 'true'
+        id: create_release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
@@ -52,3 +53,13 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "MIAWK ${{ steps.version.outputs.tag }}" \
             --generate-notes
+
+      - name: Trigger release builds
+        if: steps.release.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh workflow run platform-builds.yml \
+            --ref "${{ steps.version.outputs.tag }}" \
+            -f release_tag="${{ steps.version.outputs.tag }}"

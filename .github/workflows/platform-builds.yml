@@ -2,6 +2,11 @@ name: Release Builds
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to upload artifacts to
+        required: false
+        type: string
   release:
     types:
       - published
@@ -111,8 +116,9 @@ jobs:
           if-no-files-found: error
 
       - name: Upload preferred asset to GitHub release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || github.event.inputs.release_tag != ''
         uses: softprops/action-gh-release@v2.6.1
         with:
+          tag_name: ${{ github.event.inputs.release_tag || github.event.release.tag_name }}
           files: artifacts/${{ matrix.id }}/${{ matrix.release_asset }}
           fail_on_unmatched_files: true
