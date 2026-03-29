@@ -6,43 +6,34 @@ on:
     branches:
       - main
     paths:
-      - "Cargo.toml"
-      - ".github/workflows/publish-release.yml"
+      - Cargo.toml
+      - .github/workflows/publish-release.yml
 
 permissions:
   contents: write
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   publish:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v6.0.2
+      - name: Check out repository
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Read crate version
+      - name: Read version from Cargo.toml
         id: version
         shell: bash
         run: |
-          version=$(python3 - <<'PY'
-import tomllib
-from pathlib import Path
+          version=$(python3 -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('Cargo.toml').read_text())['package']['version'])")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
-data = tomllib.loads(Path('Cargo.toml').read_text())
-print(data['package']['version'])
-PY
-)
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
-
-      - name: Check for existing release
-        id: existing
+      - name: Check whether release already exists
+        id: release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
@@ -52,12 +43,12 @@ PY
           fi
 
       - name: Create GitHub release
-        if: steps.existing.outputs.exists != 'true'
+        if: steps.release.outputs.exists != 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           gh release create "${{ steps.version.outputs.tag }}" \
-            --target "${GITHUB_SHA}" \
+            --target "$GITHUB_SHA" \
             --title "MIAWK ${{ steps.version.outputs.tag }}" \
             --generate-notes
