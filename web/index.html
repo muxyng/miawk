@@ -571,6 +571,7 @@
       const downloadCopy = document.querySelector('[data-download-copy]');
       const downloadRows = document.querySelector('[data-download-rows]');
       const downloadBack = document.querySelector('[data-download-back]');
+      let downloadFrame = null;
 
       const copy = {
         en: {
@@ -841,12 +842,14 @@
         setDownloadsOpen(true);
         window.dispatchEvent(new CustomEvent('miawk-download-request', { detail: target }));
 
-        const link = document.createElement('a');
-        link.href = `${latestReleaseBaseUrl}${target.asset}`;
-        link.rel = 'noreferrer';
-        document.body.append(link);
-        link.click();
-        link.remove();
+        if (!downloadFrame) {
+          downloadFrame = document.createElement('iframe');
+          downloadFrame.hidden = true;
+          downloadFrame.setAttribute('aria-hidden', 'true');
+          document.body.append(downloadFrame);
+        }
+
+        downloadFrame.src = `${latestReleaseBaseUrl}${target.asset}`;
       };
 
       const detectLanguage = () => {
