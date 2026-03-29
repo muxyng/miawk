@@ -578,6 +578,34 @@ fn is_auto_drive_meta_response(text: &str) -> bool {
     .any(|needle| normalized.contains(needle))
 }
 
+fn prefix_with_char_limit(text: &str, char_limit: usize) -> Option<&str> {
+    if char_limit == 0 {
+        return Some("");
+    }
+    text.char_indices()
+        .nth(char_limit - 1)
+        .map(|(idx, ch)| &text[..idx + ch.len_utf8()])
+}
+
+fn suffix_with_char_limit(text: &str, char_limit: usize) -> &str {
+    if char_limit == 0 {
+        return "";
+    }
+    if let Some((idx, _)) = text.char_indices().nth_back(char_limit - 1) {
+        &text[idx..]
+    } else {
+        text
+    }
+}
+
+fn truncate_with_char_limit_and_ellipsis(text: &str, char_limit: usize) -> String {
+    if let Some((idx, _)) = text.char_indices().nth(char_limit) {
+        format!("{}...", &text[..idx])
+    } else {
+        text.to_string()
+    }
+}
+
 fn auto_drive_frontier_excerpt(text: &str) -> String {
     let clean = strip_assistant_protocol_lines(text);
     let mut paragraphs = clean
@@ -591,8 +619,8 @@ fn auto_drive_frontier_excerpt(text: &str) -> String {
         return tail.join("\n\n");
     }
 
-    if clean.len() > 700 {
-        clean[clean.len() - 700..].trim().to_string()
+    if clean.char_indices().nth(700).is_some() {
+        suffix_with_char_limit(&clean, 700).trim().to_string()
     } else {
         clean.trim().to_string()
     }
@@ -600,11 +628,9 @@ fn auto_drive_frontier_excerpt(text: &str) -> String {
 
 fn appears_to_replay_existing_text(last_text: &str, snapshot: &[MessageItem]) -> bool {
     let normalized = normalized_auto_drive_text(last_text);
-    if normalized.len() < 180 {
+    let Some(prefix) = prefix_with_char_limit(&normalized, 180) else {
         return false;
-    }
-
-    let prefix = &normalized[..180];
+    };
     let mut assistant_history = snapshot
         .iter()
         .filter(|message| message.kind == ChatMessageKind::Assistant && message.complete)
@@ -630,11 +656,7 @@ fn auto_drive_prompt(
 ) -> String {
     let excerpt = strip_assistant_protocol_lines(last_assistant_text);
     let excerpt = excerpt.trim();
-    let excerpt = if excerpt.len() > 900 {
-        format!("{}...", &excerpt[..900])
-    } else {
-        excerpt.to_string()
-    };
+    let excerpt = truncate_with_char_limit_and_ellipsis(excerpt, 900);
 
     let frontier = auto_drive_frontier_excerpt(last_assistant_text);
 
@@ -2126,6 +2148,7 @@ fn App() -> Element {
                                         chat_send_services.clone(),
                                         prompt_text,
                                         display_text,
+                                        Vec::new(),
                                         messages,
                                         chat_thread_id(),
                                         active_turn_id(),
@@ -2136,6 +2159,7 @@ fn App() -> Element {
                                         chat_send_services.clone(),
                                         prompt_text,
                                         display_text,
+                                        Vec::new(),
                                         true,
                                         true,
                                         messages,
@@ -3453,6 +3477,7 @@ fn submit_chat_prompt(
         services,
         prompt_to_send,
         display_text,
+        pending_attachments,
         true,
         true,
         messages,
@@ -3483,6 +3508,7 @@ fn submit_arbitrary_prompt(
     services: Arc<AppServices>,
     prompt_to_send: String,
     display_text: String,
+    pending_attachments: Vec<ChatAttachment>,
     add_user_message: bool,
     reset_auto_drive_cycle: bool,
     mut messages: Signal<Vec<MessageItem>>,
@@ -3507,7 +3533,6 @@ fn submit_arbitrary_prompt(
     mut codex_runtime_dialog: Signal<Option<String>>,
     mut notice: Signal<Option<String>>,
 ) {
-    let pending_attachments = Vec::<ChatAttachment>::new();
     let current_thread_id = chat_thread_id();
     let selected_model_id = if selected_model().is_empty() {
         "gpt-5.4".to_string()
@@ -3680,6 +3705,7 @@ fn steer_chat_prompt(
         services,
         prompt_to_send,
         display_text,
+        pending_attachments,
         messages,
         Some(thread_id),
         Some(turn_id),
@@ -3691,6 +3717,7 @@ fn steer_arbitrary_prompt(
     services: Arc<AppServices>,
     prompt_to_send: String,
     display_text: String,
+    pending_attachments: Vec<ChatAttachment>,
     mut messages: Signal<Vec<MessageItem>>,
     thread_id: Option<String>,
     turn_id: Option<String>,
@@ -3709,7 +3736,6 @@ fn steer_arbitrary_prompt(
         return;
     };
 
-    let pending_attachments = Vec::<ChatAttachment>::new();
     notice.set(None);
     messages.with_mut(|items| {
         items.push(MessageItem {
@@ -3916,6 +3942,7 @@ fn maybe_continue_auto_drive(
         services,
         prompt,
         status_text.to_string(),
+        Vec::new(),
         false,
         false,
         messages,

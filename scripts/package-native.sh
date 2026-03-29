@@ -77,7 +77,7 @@ while IFS= read -r app_dir; do
   tar -C "$(dirname "${app_dir}")" -czf "${artifact_dir}/${app_name}.tar.gz" "${app_name}"
 done < <(find target dist -type d -name '*.app' 2>/dev/null || true)
 
-if ! find "${artifact_dir}" -mindepth 1 -print -quit >/dev/null; then
+if [[ -z "$(find "${artifact_dir}" -mindepth 1 -print -quit)" ]]; then
   if ((${#failed_packages[@]} > 0)); then
     printf 'Package types that failed: %s\n' "${failed_packages[*]}" >&2
   fi

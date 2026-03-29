@@ -828,14 +828,24 @@ fn account_summary(account: &StoredAccount) -> AccountSummary {
 }
 
 fn mask_secret(secret: String) -> String {
-    if secret.len() <= 8 {
-        return "*".repeat(secret.len());
+    let secret_char_len = secret.chars().count();
+    if secret_char_len <= 8 {
+        return "*".repeat(secret_char_len);
     }
+    let prefix = secret.chars().take(3).collect::<String>();
+    let suffix = secret
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
     format!(
         "{}{}{}",
-        &secret[..3],
-        "*".repeat(secret.len().saturating_sub(7).max(4)),
-        &secret[secret.len() - 4..]
+        prefix,
+        "*".repeat(secret_char_len.saturating_sub(7).max(4)),
+        suffix
     )
 }
 
