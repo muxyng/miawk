@@ -467,8 +467,12 @@ impl AccountsService {
                 store_path.display()
             )
         })?;
-        serde_json::from_str(&raw)
-            .map_err(|error| format!("failed to parse accounts store: {error}"))
+        let mut store: AccountsStore = serde_json::from_str(&raw)
+            .map_err(|error| format!("failed to parse accounts store: {error}"))?;
+        if self.migrate_store_account_paths(&mut store) {
+            self.write_store(&store)?;
+        }
+        Ok(store)
     }
 
     fn write_store(&self, store: &AccountsStore) -> Result<(), String> {
@@ -495,16 +499,121 @@ impl AccountsService {
         self.account_root_dir().join(account_id).join("codex-home")
     }
 
+    fn legacy_data_dir(&self) -> Option<PathBuf> {
+        let current_name = self.data_dir.file_name()?.to_str()?;
+        if current_name != "com.melani.miawk" {
+            return None;
+        }
+
+        Some(self.data_dir.parent()?.join("com.melani.rsc"))
+    }
+
+    fn legacy_account_codex_home(&self, account_id: &str) -> Option<PathBuf> {
+        Some(
+            self.legacy_data_dir()?
+                .join(ACCOUNT_ROOT_DIR)
+                .join(account_id)
+                .join("codex-home"),
+        )
+    }
+
+    fn candidate_codex_homes(&self, account: &StoredAccount) -> Vec<PathBuf> {
+        let mut candidates = Vec::new();
+        let stored = PathBuf::from(&account.codex_home);
+        candidates.push(stored);
+
+        let current = self.account_codex_home(&account.id);
+        if !candidates.iter().any(|path| path == &current) {
+            candidates.push(current);
+        }
+
+        if let Some(legacy) = self.legacy_account_codex_home(&account.id) {
+            if !candidates.iter().any(|path| path == &legacy) {
+                candidates.push(legacy);
+            }
+        }
+
+        candidates
+    }
+
+    fn migrate_store_account_paths(&self, store: &mut AccountsStore) -> bool {
+        let mut changed = false;
+
+        for account in &mut store.accounts {
+            let current = self.account_codex_home(&account.id);
+            let Some(candidate) = self
+                .candidate_codex_homes(account)
+                .into_iter()
+                .find(|path| auth_file_usable(path))
+            else {
+                continue;
+            };
+
+            let resolved_home = if candidate == current {
+                current
+            } else {
+                let mut current_usable = auth_file_usable(&current);
+                if !current_usable {
+                    let current_auth = current.join("auth.json");
+                    if let Some(parent) = current.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    if !current_auth.exists() {
+                        let _ = fs::rename(&candidate, &current);
+                        current_usable = auth_file_usable(&current);
+                    }
+                }
+
+                if current_usable { current } else { candidate }
+            };
+
+            if account.codex_home != resolved_home.to_string_lossy() {
+                account.codex_home = resolved_home.to_string_lossy().into_owned();
+                changed = true;
+            }
+        }
+
+        changed
+    }
+
+    fn account_has_viable_home(&self, account: &StoredAccount) -> bool {
+        self.candidate_codex_homes(account)
+            .into_iter()
+            .any(|path| auth_file_usable(&path))
+    }
+
     fn reconcile_store_with_account_homes(
         &self,
         store: &mut AccountsStore,
     ) -> Result<bool, String> {
-        let root = self.account_root_dir();
-        if !root.exists() {
-            return Ok(false);
+        let mut changed = self.migrate_store_account_paths(store);
+
+        let original_len = store.accounts.len();
+        store.accounts.retain(|account| self.account_has_viable_home(account));
+        if store.accounts.len() != original_len {
+            changed = true;
         }
 
-        let mut changed = false;
+        let root = self.account_root_dir();
+        if !root.exists() {
+            if store.active_account_id.as_ref().is_some_and(|active_id| {
+                store
+                    .accounts
+                    .iter()
+                    .all(|account| &account.id != active_id)
+            }) {
+                store.active_account_id = None;
+                changed = true;
+            }
+
+            if store.active_account_id.is_none() && !store.accounts.is_empty() {
+                store.active_account_id = store.accounts.first().map(|account| account.id.clone());
+                changed = true;
+            }
+
+            return Ok(changed);
+        }
+
         for entry in fs::read_dir(&root).map_err(|error| {
             format!(
                 "failed to read accounts directory {}: {error}",
@@ -625,6 +734,10 @@ fn auth_file_ready(codex_home: &Path) -> Result<bool, String> {
 
     let auth = read_auth_file(codex_home)?;
     Ok(auth_bearer(&auth).is_some())
+}
+
+fn auth_file_usable(codex_home: &Path) -> bool {
+    auth_file_ready(codex_home).unwrap_or(false)
 }
 
 fn auth_chatgpt_metadata(
@@ -979,4 +1092,207 @@ fn account_unavailable_reason(account: &StoredAccount) -> Result<Option<String>,
     }
 
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new(label: &str) -> Self {
+            let path =
+                std::env::temp_dir().join(format!("miawk-accounts-tests-{label}-{}", new_id()));
+            fs::create_dir_all(&path).expect("create test data dir");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn write_auth_file(codex_home: &Path) {
+        fs::create_dir_all(codex_home).expect("create codex home");
+        fs::write(
+            codex_home.join("auth.json"),
+            r#"{"OPENAI_API_KEY":"sk-test-key"}"#,
+        )
+        .expect("write auth file");
+    }
+
+    fn write_unusable_auth_file(codex_home: &Path) {
+        fs::create_dir_all(codex_home).expect("create codex home");
+        fs::write(codex_home.join("auth.json"), "{}").expect("write unusable auth file");
+    }
+
+    fn stored_account(account_id: &str, codex_home: &Path) -> StoredAccount {
+        StoredAccount {
+            id: account_id.to_string(),
+            kind: AccountKind::ApiKey,
+            label: "Test account".to_string(),
+            codex_home: codex_home.to_string_lossy().into_owned(),
+            email: None,
+            plan_type: None,
+            subscription_active_until: None,
+            rate_limits: RateLimitSnapshot::default(),
+        }
+    }
+
+    #[test]
+    fn migrate_store_account_paths_switches_to_current_after_successful_move() {
+        let data_dir = TestDir::new("switch-after-move");
+        let service = AccountsService::new(data_dir.path().to_path_buf());
+        let account_id = "acct-switch";
+        let legacy_home = data_dir
+            .path()
+            .join("legacy")
+            .join(account_id)
+            .join("codex-home");
+        write_auth_file(&legacy_home);
+
+        let mut store = AccountsStore {
+            active_account_id: Some(account_id.to_string()),
+            accounts: vec![stored_account(account_id, &legacy_home)],
+        };
+
+        let changed = service.migrate_store_account_paths(&mut store);
+        let current_home = service.account_codex_home(account_id);
+
+        assert!(changed);
+        assert_eq!(store.accounts[0].codex_home, current_home.to_string_lossy());
+        assert!(current_home.join("auth.json").exists());
+    }
+
+    #[test]
+    fn migrate_store_account_paths_keeps_working_home_when_move_fails() {
+        let data_dir = TestDir::new("keep-on-failure");
+        let service = AccountsService::new(data_dir.path().to_path_buf());
+        let account_id = "acct-keep";
+        let legacy_home = data_dir
+            .path()
+            .join("legacy")
+            .join(account_id)
+            .join("codex-home");
+        write_auth_file(&legacy_home);
+
+        let current_home = service.account_codex_home(account_id);
+        fs::create_dir_all(&current_home).expect("create blocking current home");
+        fs::write(current_home.join("blocking.txt"), "not empty").expect("write blocking file");
+
+        let mut store = AccountsStore {
+            active_account_id: Some(account_id.to_string()),
+            accounts: vec![stored_account(account_id, &legacy_home)],
+        };
+
+        let changed = service.migrate_store_account_paths(&mut store);
+
+        assert!(!changed);
+        assert_eq!(store.accounts[0].codex_home, legacy_home.to_string_lossy());
+        assert!(legacy_home.join("auth.json").exists());
+        assert!(!current_home.join("auth.json").exists());
+    }
+
+    #[test]
+    fn migrate_store_account_paths_prefers_current_when_auth_already_exists() {
+        let data_dir = TestDir::new("prefer-current");
+        let service = AccountsService::new(data_dir.path().to_path_buf());
+        let account_id = "acct-current";
+        let legacy_home = data_dir
+            .path()
+            .join("legacy")
+            .join(account_id)
+            .join("codex-home");
+        write_auth_file(&legacy_home);
+
+        let current_home = service.account_codex_home(account_id);
+        write_auth_file(&current_home);
+
+        let mut store = AccountsStore {
+            active_account_id: Some(account_id.to_string()),
+            accounts: vec![stored_account(account_id, &legacy_home)],
+        };
+
+        let changed = service.migrate_store_account_paths(&mut store);
+
+        assert!(changed);
+        assert_eq!(store.accounts[0].codex_home, current_home.to_string_lossy());
+    }
+
+    #[test]
+    fn migrate_store_account_paths_uses_legacy_when_current_auth_is_unusable() {
+        let root_dir = TestDir::new("skip-unusable-stored-home");
+        let data_dir = root_dir.path().join("com.melani.miawk");
+        fs::create_dir_all(&data_dir).expect("create current data dir");
+        let service = AccountsService::new(data_dir.clone());
+        let account_id = "acct-unusable";
+
+        let current_home = service.account_codex_home(account_id);
+        write_unusable_auth_file(&current_home);
+
+        let legacy_home = data_dir
+            .parent()
+            .expect("data dir has parent")
+            .join("com.melani.rsc")
+            .join("accounts")
+            .join(account_id)
+            .join("codex-home");
+        write_auth_file(&legacy_home);
+
+        let mut store = AccountsStore {
+            active_account_id: Some(account_id.to_string()),
+            accounts: vec![stored_account(account_id, &current_home)],
+        };
+
+        let changed = service.migrate_store_account_paths(&mut store);
+
+        assert!(changed);
+        assert_eq!(store.accounts[0].codex_home, legacy_home.to_string_lossy());
+    }
+
+    #[test]
+    fn read_store_persists_migrated_account_paths() {
+        let data_dir = TestDir::new("persist-migrated-paths");
+        let service = AccountsService::new(data_dir.path().to_path_buf());
+        let account_id = "acct-persist";
+        let legacy_home = data_dir
+            .path()
+            .join("legacy")
+            .join(account_id)
+            .join("codex-home");
+        write_auth_file(&legacy_home);
+
+        let initial = AccountsStore {
+            active_account_id: Some(account_id.to_string()),
+            accounts: vec![stored_account(account_id, &legacy_home)],
+        };
+        service.write_store(&initial).expect("write initial store");
+
+        let migrated = service.read_store().expect("read and migrate store");
+        let current_home = service.account_codex_home(account_id);
+
+        assert_eq!(
+            migrated.accounts[0].codex_home,
+            current_home.to_string_lossy()
+        );
+
+        let persisted_raw =
+            fs::read_to_string(service.store_path()).expect("read migrated store from disk");
+        let persisted: AccountsStore =
+            serde_json::from_str(&persisted_raw).expect("parse migrated store");
+
+        assert_eq!(
+            persisted.accounts[0].codex_home,
+            current_home.to_string_lossy()
+        );
+    }
 }

@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   bundle:
     name: ${{ matrix.name }}
@@ -55,11 +58,11 @@ jobs:
             release_asset: miawk-macos-arm64.dmg
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6.0.2
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.1
 
       - name: Install Linux system packages
         if: startsWith(matrix.runner, 'ubuntu-')
@@ -101,7 +104,7 @@ jobs:
           cp "${matches[0]}" "artifacts/${{ matrix.id }}/${{ matrix.release_asset }}"
 
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.0
         with:
           name: ${{ matrix.id }}
           path: artifacts/${{ matrix.id }}
@@ -109,7 +112,7 @@ jobs:
 
       - name: Upload preferred asset to GitHub release
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v2.6.1
         with:
           files: artifacts/${{ matrix.id }}/${{ matrix.release_asset }}
           fail_on_unmatched_files: true
